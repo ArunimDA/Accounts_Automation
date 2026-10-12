@@ -1,14 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
-https://drive.google.com/drive/folders/1uWk690Cg2I2wJsSq_e-uA32l3B8Vuko_?usp=drive_link
-
-
-# In[3]:
-
 
 import os
 import glob
