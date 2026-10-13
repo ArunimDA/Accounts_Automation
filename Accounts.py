@@ -1,185 +1,173 @@
-
-import os
 import glob
+import os
 import re
-import pandas as pd
 import numpy as np
+import openpyxl
+import pandas as pd
 
 # ==============================================================================
-# FOLDER PATHS
+# FOLDER PATHS (Relative paths for GitHub Actions & Local execution)
 # ==============================================================================
-WATCH_FOLDER_PATH = r"G:\My Drive\Accounts Data Automation" 
-OUTPUT_FOLDER_PATH = r"G:\My Drive\Accounts Data Output"
+# If running on GitHub, it reads from 'data' downloaded via gdown.
+# If running locally without 'data', it can fallback to your local Drive path.
+if os.path.exists("data"):
+  WATCH_FOLDER_PATH = "data"
+  OUTPUT_FOLDER_PATH = "."
+elif os.path.exists(r"G:\My Drive\Accounts Data Automation"):
+  WATCH_FOLDER_PATH = r"G:\My Drive\Accounts Data Automation"
+  OUTPUT_FOLDER_PATH = r"G:\My Drive\Accounts Data Output"
+else:
+  WATCH_FOLDER_PATH = "data"
+  OUTPUT_FOLDER_PATH = "."
+
 os.makedirs(OUTPUT_FOLDER_PATH, exist_ok=True)
+OUTPUT_FILE = os.path.join(OUTPUT_FOLDER_PATH, "CFO_Daily_Master_Report.xlsx")
 
-
-# ==========================================
-# 1. ROBUST DATE PARSER (FIXES BLANK DATES)
-# ==========================================
+# ==============================================================================
+# 1. ROBUST DATE PARSER
+# ==============================================================================
 def parse_date_robust(val):
-    if pd.isna(val) or val is None or str(val).strip() == "":
-        return np.nan
-    val_str = str(val).strip()
-    # Try parsing standard formats first
-    dt = pd.to_datetime(val_str, errors="coerce")
-    if pd.notna(dt):
-        return dt.strftime("%Y-%m-%d")
-    return val_str
+  if pd.isna(val) or val is None or str(val).strip() == "":
+    return np.nan
+  val_str = str(val).strip()
+  # Standard pandas parse attempt
+  try:
+    parsed = pd.to_datetime(val_str, errors="coerce")
+    if pd.notna(parsed):
+      return parsed.strftime("%Y-%m-%d")
+  except Exception:
+    pass
+
+  # Fallback regex parsing (YYYY-MM-DD, MM/DD/YYYY, etc.)
+  match = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", val_str)
+  if match:
+    y, m, d = match.groups()
+    return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+
+  match = re.search(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", val_str)
+  if match:
+    m, d, y = match.groups()
+    return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+
+  return val_str
 
 
-# ==========================================
-# 2. NUMERIC AMOUNT PARSER (FIXES DIRTY TEXT & $)
-# ==========================================
-def parse_numeric_amount(val):
-    if pd.isna(val) or val is None:
-        return 0.0
-    val_str = str(val).strip()
-    if val_str in ["", "N/A", "nan", "None", "null"]:
-        return 0.0
-    # Strip any characters that aren't digits, negative signs, or decimals
-    clean_str = re.sub(r"[^\d.-]", "", val_str)
+# ==============================================================================
+# 2. NUMERIC AMOUNT CLEANER
+# ==============================================================================
+def clean_amount(val):
+  if pd.isna(val) or val is None:
+    return 0.0
+  val_str = str(val).strip()
+  if val_str.upper() in ["N/A", "NAN", "NULL", "NONE", ""]:
+    return 0.0
+  # Strip currency signs, commas, and letters like USD/US$
+  cleaned = re.sub(r"[^\d.-]", "", val_str)
+  try:
+    return float(cleaned)
+  except ValueError:
+    return 0.0
+
+
+# ==============================================================================
+# 3. LOAD AND CONSOLIDATE ALL RAW FILES
+# ==============================================================================
+def load_and_clean_data(folder_path):
+  all_files = glob.glob(os.path.join(folder_path, "*.xlsx")) + glob.glob(
+      os.path.join(folder_path, "*.csv")
+  )
+  valid_files = [
+      f for f in all_files if not os.path.basename(f).startswith("~$")
+  ]
+
+  if not valid_files:
+    print(f"No files found in {folder_path} to process.")
+    return pd.DataFrame()
+
+  print(f"Found {len(valid_files)} files: {[os.path.basename(f) for f in valid_files]}")
+
+  dataframes = []
+  for filepath in sorted(valid_files):
     try:
-        return round(float(clean_str), 2)
-    except ValueError:
-        return 0.0
+      if filepath.endswith(".csv"):
+        df = pd.read_csv(filepath)
+      else:
+        df = pd.read_excel(filepath)
 
+      # Standardize column names
+      df.columns = [c.strip() for c in df.columns]
 
-# ==========================================
-# 3. COMPREHENSIVE DATA CLEANING ENGINE
-# ==========================================
-def clean_ledger_data(df_raw):
-    if df_raw.empty:
-        return df_raw
+      # Extract date from filename if Posting_Date is blank
+      fname_date_match = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(filepath))
+      fallback_date = fname_date_match.group(1) if fname_date_match else np.nan
 
-    df = df_raw.copy()
-
-    # 1. Deduplicate by Transaction_ID
-    if "Transaction_ID" in df.columns:
-        df["Transaction_ID"] = df["Transaction_ID"].astype(str).str.strip()
-        df = df.drop_duplicates(subset=["Transaction_ID"], keep="first")
-
-    # 2. Fix Posting_Date (fill missing dates using forward-fill or target ledger date)
-    if "Posting_Date" in df.columns:
+      if "Posting_Date" in df.columns:
         df["Posting_Date"] = df["Posting_Date"].apply(parse_date_robust)
-        # If any date was corrupted, forward-fill from previous transaction in the batch
-        df["Posting_Date"] = df["Posting_Date"].ffill().bfill()
+        if fallback_date:
+          df["Posting_Date"] = df["Posting_Date"].fillna(fallback_date)
 
-    # 3. Clean Text Columns & Standardize Casing (Fixes ALL CAPS like SNOWFLAKE)
-    text_cols = ["Entity", "Department", "Account_Name", "Account_Type", "Counterparty", "Status", "Payment_Method"]
-    for col in text_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-            df[col] = df[col].replace(["None", "nan", ""], "Unspecified")
-            df[col] = df[col].str.title()
+      dataframes.append(df)
+    except Exception as e:
+      print(f"Error reading {filepath}: {e}")
 
-    # Currency should strictly be uppercase USD
-    if "Currency" in df.columns:
-        df["Currency"] = df["Currency"].astype(str).str.strip().str.upper()
-        df["Currency"] = df["Currency"].replace(["US$", " USD ", "usd", ""], "USD")
+  if not dataframes:
+    return pd.DataFrame()
 
-    # 4. FIX AMOUNT COLUMN IN-PLACE (Strict Float64, No $, No strings)
-    if "Amount" in df.columns:
-        df["Amount"] = df["Amount"].apply(parse_numeric_amount)
+  consolidated_df = pd.concat(dataframes, ignore_index=True)
 
-    # 5. Fix Missing Cost Centers & Approved_By
-    if "Cost_Center" in df.columns:
-        df["Cost_Center"] = df["Cost_Center"].replace(["None", "nan", np.nan, ""], "CC-UNASSIGNED")
+  # Clean string fields
+  string_cols = ["Entity", "Department", "Account_Name", "Account_Type", "Payment_Method", "Status"]
+  for col in string_cols:
+    if col in consolidated_df.columns:
+      consolidated_df[col] = consolidated_df[col].astype(str).str.strip().str.title()
 
-    if "Approved_By" in df.columns:
-        # Standardize empty audit approvals based on status
-        df["Approved_By"] = df["Approved_By"].fillna("Pending_Signoff").replace(["None", "nan", ""], "Pending_Signoff")
+  # Clean Amount
+  if "Amount" in consolidated_df.columns:
+    consolidated_df["Amount"] = consolidated_df["Amount"].apply(clean_amount)
 
-    if "Description" in df.columns:
-        df["Description"] = df["Description"].fillna("No Description Provided").replace(["None", "nan", ""], "No Description Provided")
+  # Signed Amount mapping
+  def get_signed_amount(row):
+    acc_type = str(row.get("Account_Type", "")).lower()
+    amt = row.get("Amount", 0.0)
+    if "revenue" in acc_type:
+      return amt
+    elif any(k in acc_type for k in ["cogs", "opex", "capex", "cost"]):
+      return -amt
+    return amt
 
-    # 6. Add Financial Sign Convention Column for Executive CFO Modeling
-    # Positive for Revenue, Negative for Outflows (COGS, OpEx, CapEx)
-    df["Signed_Amount"] = df.apply(
-        lambda row: row["Amount"] if row["Account_Type"] == "Revenue" else -row["Amount"],
-        axis=1
-    )
+  consolidated_df["Signed_Amount"] = consolidated_df.apply(get_signed_amount, axis=1)
 
-    return df
+  return consolidated_df
 
 
-# ==========================================
-# 4. CFO DAILY SUMMARY
-# ==========================================
-def calculate_cfo_metrics(df):
-    if df.empty:
-        return pd.DataFrame(), pd.DataFrame()
+# ==============================================================================
+# 4. BUILD FINANCIAL SUMMARIES
+# ==============================================================================
+def generate_cfo_daily_summary(df):
+  if df.empty:
+    return pd.DataFrame()
 
-    daily_records = []
-    unique_dates = sorted([d for d in df["Posting_Date"].dropna().unique()])
+  records = []
+  for date, group in df.groupby("Posting_Date"):
+    if pd.isna(date) or str(date).lower() in ["nan", "none"]:
+      continue
 
-    for d in unique_dates:
-        sub = df[df["Posting_Date"] == d]
+    rev = group[group["Account_Type"].str.contains("Revenue", case=False, na=False)]["Amount"].sum()
+    cogs = group[group["Account_Type"].str.contains("Cogs|Cost", case=False, na=False)]["Amount"].sum()
+    opex = group[group["Account_Type"].str.contains("Opex", case=False, na=False)]["Amount"].sum()
+    capex = group[group["Account_Type"].str.contains("Capex", case=False, na=False)]["Amount"].sum()
 
-        rev = sub[sub["Account_Type"] == "Revenue"]["Amount"].sum()
-        cogs = sub[sub["Account_Type"] == "Cogs"]["Amount"].sum()
-        opex = sub[sub["Account_Type"] == "Opex"]["Amount"].sum()
-        capex = sub[sub["Account_Type"] == "Capex"]["Amount"].sum()
+    ebitda = rev - (cogs + opex)
+    net_cash_flow = rev - (cogs + opex + capex)
 
-        gross_profit = rev - cogs
-        operating_profit = gross_profit - opex
-        net_cash_flow = rev - (cogs + opex + capex)
+    pending_held = group[group["Status"].str.contains("Hold|Pending", case=False, na=False)]["Amount"].sum()
+    total_entries = len(group)
 
-        pending_exposure = sub[sub["Status"].isin(["Pending Approval", "On Hold"])]["Amount"].sum()
-
-        daily_records.append({
-            "Posting_Date": d,
-            "Daily_Revenue_Inflow ($)": round(rev, 2),
-            "COGS ($)": round(cogs, 2),
-            "OpEx ($)": round(opex, 2),
-            "Operating_Profit_EBITDA ($)": round(operating_profit, 2),
-            "CapEx ($)": round(capex, 2),
-            "Net_Daily_Cash_Flow ($)": round(net_cash_flow, 2),
-            "Pending_or_Held_Exposure ($)": round(pending_exposure, 2),
-            "Total_Processed_Entries": len(sub)
-        })
-
-    cfo_summary_df = pd.DataFrame(daily_records)
-
-    dept_spend_df = (
-        df[df["Account_Type"].isin(["Opex", "Cogs"])]
-        .groupby(["Department", "Account_Type"])["Amount"]
-        .sum()
-        .round(2)
-        .reset_index()
-        .rename(columns={"Amount": "Total_Spend_USD"})
-    )
-
-    return cfo_summary_df, dept_spend_df
-
-
-# ==========================================
-# 5. EXECUTION & DYNAMIC SCAN
-# ==========================================
-def run_pipeline():
-    file_paths = glob.glob(os.path.join(WATCH_FOLDER_PATH, "*.xlsx"))
-    active_files = [f for f in file_paths if not os.path.basename(f).startswith("~$")]
-
-    if not active_files:
-        print(f"No active Excel sheets found in {WATCH_FOLDER_PATH}.")
-        return
-
-    frames = [pd.read_excel(fp, sheet_name=0) for fp in active_files]
-    df_raw = pd.concat(frames, ignore_index=True)
-
-    # Clean data
-    df_clean = clean_ledger_data(df_raw)
-    cfo_summary, dept_spend = calculate_cfo_metrics(df_clean)
-
-    # Export
-    output_filepath = os.path.join(OUTPUT_FOLDER_PATH, "CFO_Daily_Master_Report.xlsx")
-    with pd.ExcelWriter(output_filepath, engine="openpyxl") as writer:
-        cfo_summary.to_excel(writer, sheet_name="CFO_Daily_Summary", index=False)
-        dept_spend.to_excel(writer, sheet_name="Department_Breakdown", index=False)
-        df_clean.to_excel(writer, sheet_name="Consolidated_Clean_Data", index=False)
-
-    print(f"Successfully generated clean master sheet with 0 anomalies: {output_filepath}")
-
-
-if __name__ == "__main__":
-    run_pipeline()
-
+    records.append({
+        "Posting_Date": date,
+        "Daily_Revenue_Inflow ($)": round(rev, 2),
+        "COGS ($)": round(cogs, 2),
+        "OpEx ($)": round(opex, 2),
+        "Operating_Profit_EBITDA ($)": round(ebitda, 2),
+        "CapEx ($)": round(capex, 2),
+        "Net_Daily_Cash_Flow ($
