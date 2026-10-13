@@ -1,12 +1,9 @@
 name: Run CFO Master Pipeline
 
 on:
-  # 1. Triggered on demand by Make.com when files are added or deleted
   repository_dispatch:
     types: [trigger-pipeline]
   workflow_dispatch:
-
-  # 2. Runs automatically every day at 6:00 AM UTC even if nothing changed
   schedule:
     - cron: '0 6 * * *'
 
@@ -19,6 +16,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,12 +28,20 @@ jobs:
         run: |
           pip install pandas openpyxl gdown requests
 
-      - name: Clean Old Data and Download Current Files from Google Drive
+      - name: Clean Old Data and Download Files from Google Drive
         run: |
-          rm -rf ./data
-          mkdir -p ./data
-          # Downloads current state of the folder (handles added/deleted files)
-          gdown --folder https://drive.google.com/drive/folders/1uWk690Cg2I2wJsSq_e-uA32l3B8Vuko_ -O ./data/
+          rm -rf ./temp_download ./data
+          mkdir -p ./temp_download ./data
+          
+          # Download folder contents
+          gdown --folder "https://drive.google.com/drive/folders/1uWk690Cg2I2wJsSq_e-uA32l3B8Vuko_?usp=sharing" -O ./temp_download/ --remaining-ok
+          
+          # Flatten all downloaded files directly into ./data/
+          find ./temp_download -type f \( -name "*.xlsx" -o -name "*.csv" \) -exec mv -f {} ./data/ \;
+          rm -rf ./temp_download
+          
+          echo "Downloaded files in ./data/:"
+          ls -la ./data/
 
       - name: Run Accounts Calculation Script
         run: |
@@ -44,6 +51,17 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add CFO_Daily_Master_Report.xlsx
-          git diff-index --quiet HEAD || git commit -m "Automated update: CFO Master Report"
-          git push
+          
+          if [ -f "CFO_Daily_Master_Report.xlsx" ]; then
+            git add CFO_Daily_Master_Report.xlsx
+            if ! git diff-index --quiet HEAD; then
+              git commit -m "Automated update: CFO Master Report [skip ci]"
+              git pull --rebase
+              git push
+            else
+              echo "No changes detected in CFO_Daily_Master_Report.xlsx."
+            fi
+          else
+            echo "Error: CFO_Daily_Master_Report.xlsx was not generated."
+            exit 1
+          fi
