@@ -4,6 +4,8 @@ on:
   repository_dispatch:
     types: [trigger-pipeline]
   workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
 
 jobs:
   build-and-compile:
@@ -24,24 +26,24 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pandas openpyxl
+          pip install pandas openpyxl requests
 
       - name: Run Accounts Calculation Script
         run: |
           python Accounts.py
 
-      - name: Commit and Push Updated Report
+      - name: Commit and Push Master Report
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
+          ls -la
+          
           if [ -f "CFO_Daily_Master_Report.xlsx" ]; then
-            git add CFO_Daily_Master_Report.xlsx
-            if ! git diff-index --quiet HEAD; then
-              git commit -m "Automated update: CFO Master Report [skip ci]"
-              git pull --rebase
-              git push
-            else
-              echo "No changes detected."
-            fi
+            git add -f CFO_Daily_Master_Report.xlsx
+            git commit -m "Automated update: CFO Master Report" || echo "No changes to commit"
+            git push origin main
+          else
+            echo "Error: CFO_Daily_Master_Report.xlsx was not created by Accounts.py"
+            exit 1
           fi
