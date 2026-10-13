@@ -42,8 +42,11 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add CFO_Daily_Master_Report.xlsx
-          git diff --staged --quiet || git commit -m "Automated update: CFO_Daily_Master_Report.xlsx"
-          git push
+          if ! git diff --staged --quiet; then
+            git commit -m "Automated update: CFO_Daily_Master_Report.xlsx"
+            git pull --rebase origin main
+            git push origin main
+          fi
 
       - name: Trigger Make.com Webhook
         if: success()
