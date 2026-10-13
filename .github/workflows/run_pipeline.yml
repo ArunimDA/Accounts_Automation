@@ -26,21 +26,16 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pandas openpyxl gdown requests
+          pip install pandas openpyxl "gdown>=5.0.0" requests
 
-      - name: Clean Old Data and Download Files from Google Drive
+      - name: Download Files from Google Drive
         run: |
-          rm -rf ./temp_download ./data
-          mkdir -p ./temp_download ./data
+          rm -rf ./data
+          python download_data.py
           
-          # Download folder contents
-          gdown --folder "https://drive.google.com/drive/folders/1uWk690Cg2I2wJsSq_e-uA32l3B8Vuko_?usp=sharing" -O ./temp_download/ --remaining-ok
-          
-          # Flatten all downloaded files directly into ./data/
-          find ./temp_download -type f \( -name "*.xlsx" -o -name "*.csv" \) -exec mv -f {} ./data/ \;
-          rm -rf ./temp_download
-          
-          echo "Downloaded files in ./data/:"
+          # Flatten nested folder if gdown created a subfolder
+          find ./data -mindepth 2 -type f \( -name "*.xlsx" -o -name "*.csv" \) -exec mv -f {} ./data/ \;
+          echo "Files ready in ./data/:"
           ls -la ./data/
 
       - name: Run Accounts Calculation Script
