@@ -4,8 +4,6 @@ on:
   repository_dispatch:
     types: [trigger-pipeline]
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *'
 
 jobs:
   build-and-compile:
@@ -26,23 +24,13 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pandas openpyxl "gdown>=5.0.0" requests
-
-      - name: Download Files from Google Drive
-        run: |
-          rm -rf ./data
-          python download_data.py
-          
-          # Flatten nested folder if gdown created a subfolder
-          find ./data -mindepth 2 -type f \( -name "*.xlsx" -o -name "*.csv" \) -exec mv -f {} ./data/ \;
-          echo "Files ready in ./data/:"
-          ls -la ./data/
+          pip install pandas openpyxl
 
       - name: Run Accounts Calculation Script
         run: |
           python Accounts.py
 
-      - name: Commit and Push Updated Report to GitHub
+      - name: Commit and Push Updated Report
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -54,9 +42,6 @@ jobs:
               git pull --rebase
               git push
             else
-              echo "No changes detected in CFO_Daily_Master_Report.xlsx."
+              echo "No changes detected."
             fi
-          else
-            echo "Error: CFO_Daily_Master_Report.xlsx was not generated."
-            exit 1
           fi
