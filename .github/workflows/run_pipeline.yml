@@ -26,7 +26,18 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pandas openpyxl requests
+          pip install pandas openpyxl "gdown>=5.1.0" requests
+
+      - name: Download Data from Google Drive
+        run: |
+          rm -rf ./data
+          python download.py
+          
+          # If gdown created a subfolder inside data, move files up to ./data/
+          find ./data -mindepth 2 -type f \( -name "*.xlsx" -o -name "*.csv" \) -exec mv -f {} ./data/ \;
+          
+          echo "Files inside ./data/:"
+          ls -la ./data/
 
       - name: Run Accounts Calculation Script
         run: |
@@ -36,8 +47,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          ls -la
           
           if [ -f "CFO_Daily_Master_Report.xlsx" ]; then
             git add -f CFO_Daily_Master_Report.xlsx
