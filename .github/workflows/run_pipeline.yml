@@ -1,12 +1,17 @@
 name: Run CFO Master Pipeline
 
 on:
+  # 1. Triggered on demand by Make.com when files are added or deleted
   repository_dispatch:
     types: [trigger-pipeline]
   workflow_dispatch:
 
+  # 2. Runs automatically every day at 6:00 AM UTC even if nothing changed
+  schedule:
+    - cron: '0 6 * * *'
+
 jobs:
-  build-report:
+  build-and-compile:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -20,20 +25,22 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Libraries
+      - name: Install Dependencies
         run: |
           pip install pandas openpyxl gdown requests
 
-      - name: Download Raw Data from Google Drive Folder
+      - name: Clean Old Data and Download Current Files from Google Drive
         run: |
-          # Downloads all files from your public Accounts Data Automation folder
+          rm -rf ./data
+          mkdir -p ./data
+          # Downloads current state of the folder (handles added/deleted files)
           gdown --folder https://drive.google.com/drive/folders/1uWk690Cg2I2wJsSq_e-uA32l3B8Vuko_ -O ./data/
 
       - name: Run Accounts Calculation Script
         run: |
           python Accounts.py
 
-      - name: Commit and Push Updated Master Report
+      - name: Commit and Push Updated Report to GitHub
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
