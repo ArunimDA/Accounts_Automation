@@ -4,45 +4,33 @@ on:
   repository_dispatch:
     types: [trigger-pipeline]
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *'
+
+permissions:
+  contents: write
 
 jobs:
   build-and-compile:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
-          pip install pandas openpyxl "gdown>=5.1.0" requests
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Download Data from Google Drive
+        env:
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
         run: |
-          # 1. Wipe the data directory clean so no previously processed/deleted files persist
-          rm -rf ./data
-          mkdir -p ./data
-          
-          # 2. Download current files from Google Drive
-          python download.py
-          
-          # 3. Flatten if gdown nested files inside a subfolder
-          find ./data -mindepth 2 -type f \( -name "*.xlsx" -o -name "*.csv" \) -exec mv -f {} ./data/ \;
-          
-          # 4. Print current active files to runner log for verification
-          echo "Active input files to process:"
-          ls -la ./data/
+          python scripts/download_drive_data.py
 
       - name: Run Accounts Calculation Script
         run: |
@@ -52,12 +40,13 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          if [ -f "CFO_Daily_Master_Report.xlsx" ]; then
-            git add -f CFO_Daily_Master_Report.xlsx
-            git commit -m "Automated update: CFO Master Report" || echo "No changes to commit"
-            git push origin main
-          else
-            echo "Error: CFO_Daily_Master_Report.xlsx was not created by Accounts.py"
-            exit 1
-          fi
+          git add CFO_Daily_Master_Report.xlsx
+          git diff --staged --quiet || git commit -m "Automated update: CFO_Daily_Master_Report.xlsx"
+          git push
+
+      - name: Trigger Make.com Webhook
+        if: success()
+        run: |
+          curl -X POST "${{ secrets.MAKE_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "success", "report": "CFO_Daily_Master_Report.xlsx"}'
