@@ -30,13 +30,18 @@ jobs:
 
       - name: Download Data from Google Drive
         run: |
+          # 1. Wipe the data directory clean so no previously processed/deleted files persist
           rm -rf ./data
+          mkdir -p ./data
+          
+          # 2. Download current files from Google Drive
           python download.py
           
-          # If gdown created a subfolder inside data, move files up to ./data/
+          # 3. Flatten if gdown nested files inside a subfolder
           find ./data -mindepth 2 -type f \( -name "*.xlsx" -o -name "*.csv" \) -exec mv -f {} ./data/ \;
           
-          echo "Files inside ./data/:"
+          # 4. Print current active files to runner log for verification
+          echo "Active input files to process:"
           ls -la ./data/
 
       - name: Run Accounts Calculation Script
